@@ -396,7 +396,7 @@ uint16_t ZMachine::getVar(uint8_t var) {
         if (fp > 0) return frames[fp - 1].locals[var - 1];
         return 0;
     } 
-    // 🟢 SPEC FIX: Explicitly cast calculations to uint32_t to protect the table boundaries
+    // 🟢 FIXED: Explicitly cast the arithmetic to uint32_t to stop 16-bit truncation!
     return read16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2));
 }
 
@@ -405,7 +405,7 @@ void ZMachine::setVar(uint8_t var, uint16_t val) {
     else if (var >= 0x01 && var <= 0x0F) {
         if (fp > 0) frames[fp - 1].locals[var - 1] = val;
     } 
-    // 🟢 SPEC FIX: Explicitly cast calculations to uint32_t to protect the table boundaries
+    // 🟢 FIXED: Explicitly cast the arithmetic to uint32_t to stop 16-bit truncation!
     else write16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2), val);
 }
 
