@@ -98,6 +98,7 @@ void setup() {
 
 void loop() {
       printLog("[DBG] in loop...\n");
+
     #ifndef NATIVE_DESKTOP
         M5Cardputer.update();
     #endif
