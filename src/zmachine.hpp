@@ -18,6 +18,8 @@ public:
     void updateStatus(UI& ui);
 
     // Dictionary and Text Tokenization
+    std::string decodeDictWord(uint32_t entry_addr);
+    void encodeWord(const std::string& word, uint16_t& out_w1, uint16_t& out_w2);
     uint16_t findWord(const std::string& word);
     void tokenize(uint16_t textBuf, uint16_t parseBuf);
 
@@ -63,11 +65,14 @@ private:
     uint8_t hist_num[32] = {0};
     int hist_idx = 0;
     uint32_t total_executed_ops = 0;
-    
+
     uint32_t last_pc = 0;      // 🟢 UPGRADED: 32-bit tracker to cleanly match pc register
     int loop_counter = 0;
-    
+
     bool waiting_input = false;
+
+    uint32_t cached_text_buffer = 0;
+    uint32_t cached_parse_buffer = 0;
 
     UI* ui = nullptr;
 
@@ -96,6 +101,8 @@ private:
     void branch(bool cond);
     void call(uint16_t addr, uint8_t argc, uint16_t* args);
     void ret(uint16_t val);
+
+    uint32_t unpackAddress(uint16_t packed_addr);
 
     // Z-String Processing
     std::string printZString(uint16_t addr);
