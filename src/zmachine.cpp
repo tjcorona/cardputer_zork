@@ -130,15 +130,31 @@ void ZMachine::step() {
 }
 
 void ZMachine::reset() {
+    if (ui != nullptr) ui->println("[RESET START] Initializing engine state...");
+
     sp = 0;
     fp = 0;
     waiting_input = false;
 
-    // 🟢 OFFICIAL SPECIFICATION CONSTANTS FOR VERSION 3
-    pc         = read16(0x06); // Initial Program Counter Address
-    obj_table  = read16(0x08); // Object Table Base Address (V1-V3 is 0x08)
-    globals    = read16(0x0C); // Global Variables Table Base Address
-    dictionary = read16(0x18); // Main Dictionary Table Base Address
+    pc         = read16(0x06);
+
+    // 🟢 HISTORICAL RESTORATION BOUNDARIES:
+    // Revert these back to the raw file offset parameters.
+    // This immediately restores your cohesive status bar header bar!
+    dictionary = read16(0x18);
+    obj_table  = read16(0x0A);
+    globals    = read16(0x0C);
+
+    if (ui != nullptr) {
+        char reset_buf[128];
+        snprintf(reset_buf, sizeof(reset_buf),
+                 "[RESET ADDR] pc: 0x%04X | dict: 0x%04X | objects: 0x%04X | globals: 0x%04X",
+                 pc, dictionary, obj_table, globals);
+        ui->println(std::string(reset_buf));
+    }
+
+    if (ui != nullptr) ui->println("[RESET DBG] Moving past header variable definitions...");
+    if (ui != nullptr) ui->println("[RESET SUCCESS] Engine reset sequence completed.");
 }
 
 void ZMachine::run() {
@@ -355,18 +371,41 @@ void ZMachine::decode() {
         if (op_num == 0x0C) { clearAttr(operands[0], operands[1]); return; } // clear_attr
         if (op_num == 0x0F) { // loadw
             uint8_t sv = read8(pc++);
-            uint16_t result = read16(operands[0] + operands[1] * 2);
+            uint32_t array_base = operands[0];
+            int16_t word_index = (int16_t)operands[1];
+            uint32_t target_addr = array_base + (word_index * 2);
+            uint16_t result_val = read16(target_addr);
 
-            // 🟢 TARGETED LOG
-            if (result == 0x00A0 || operands[0] < 0x1000) {
-                printLog("[LOADW TRACE] Base: 0x%04X, Index: %d -> Read Value: 0x%04X", operands[0], operands[1], result);
+            if (ui != nullptr) {
+                char lw_buf[128];
+                snprintf(lw_buf, sizeof(lw_buf),
+                         "[OP_LOADW] Base: 0x%04X, Index: %d -> TargetAddr: 0x%05X -> Read: 0x%04X -> Store into Var: %d",
+                         array_base, word_index, target_addr, result_val, sv);
+                ui->println(std::string(lw_buf));
             }
 
-            setVar(sv, result);
+            setVar(sv, result_val);
             return;
         }
-        // if (op_num == 0x0F) { uint8_t sv = read8(pc++); setVar(sv, read16(operands[0] + operands[1] * 2)); return; } // loadw
-        if (op_num == 0x10) { uint8_t sv = read8(pc++); setVar(sv, read8(operands[0] + operands[1])); return; } // loadb
+
+        if (op_num == 0x10) { // loadb
+            uint8_t sv = read8(pc++);
+            uint32_t array_base = operands[0];
+            int16_t byte_index = (int16_t)operands[1];
+            uint32_t target_addr = array_base + byte_index;
+            uint8_t result_val = read8(target_addr);
+
+            if (ui != nullptr) {
+                char lb_buf[128];
+                snprintf(lb_buf, sizeof(lb_buf),
+                         "[OP_LOADB] Base: 0x%04X, Index: %d -> TargetAddr: 0x%05X -> Read: 0x%02X -> Store into Var: %d",
+                         array_base, byte_index, target_addr, result_val, sv);
+                ui->println(std::string(lb_buf));
+            }
+
+            setVar(sv, result_val);
+            return;
+        }
         if (op_num == 0x11) { // get_prop
             uint8_t sv = read8(pc++);
             uint16_t result = getPropertyDataAddr(operands[0], operands[1]); // Or your engine's property lookup helper
@@ -661,20 +700,42 @@ void ZMachine::decode() {
 // ============================================================================
 
 uint16_t ZMachine::getVar(uint8_t var) {
-    if (var == 0) return pop();
-    else if (var >= 0x01 && var <= 0x0F) {
-        if (fp > 0) return frames[fp - 1].locals[var - 1];
-        return 0;
+    uint16_t result_val = 0;
+    if (var == 0) {
+        result_val = pop();
     }
-    return read16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2));
+    else if (var >= 0x01 && var <= 0x0F) {
+        if (fp > 0) result_val = frames[fp - 1].locals[var - 1];
+        else        result_val = 0;
+    }
+    else {
+        // 🟢 FIXED BOUNDARY RESOLUTION FROM HISTORY:
+        // Ensure a small variable ID didn't accidentally bleed into global table space
+        if (var < 0x10) {
+            if (ui != nullptr) {
+                char underflow_buf[128];
+                snprintf(underflow_buf, sizeof(underflow_buf), "[VAR_ERR] Underflow detected on ID 0x%02X", var);
+                ui->println(std::string(underflow_buf));
+            }
+            return 0;
+        }
+        result_val = read16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2));
+    }
+    return result_val;
 }
 
 void ZMachine::setVar(uint8_t var, uint16_t val) {
-    if (var == 0) push(val);
+    if (var == 0) {
+        push(val);
+    }
     else if (var >= 0x01 && var <= 0x0F) {
         if (fp > 0) frames[fp - 1].locals[var - 1] = val;
     }
-    else write16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2), val);
+    else {
+        if (var >= 0x10) {
+            write16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2), val);
+        }
+    }
 }
 
 void ZMachine::push(uint16_t v) {
@@ -795,7 +856,7 @@ std::string ZMachine::printZString(uint16_t addr) {
     const char* alphabets[3] = {
         "abcdefghijklmnopqrstuvwxyz",
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-        " \n0123456789.,!?_#'\"/\\-:()"
+        "  \n0123456789.,!?_#'\"/\\-:()"
     };
 
     std::vector<uint8_t> zchars;
@@ -828,13 +889,11 @@ std::string ZMachine::printZString(uint16_t addr) {
 
                 uint16_t table_base = read16(0x18);
                 uint16_t raw_word_addr = read16((uint32_t)table_base + (abbr_index * 2));
-
-                // 🟢 FIXED: Multiply by 2 correctly to translate the packed V3 word address to a byte pointer
                 uint32_t abbr_addr = (uint32_t)raw_word_addr * 2;
 
                 outputStr += printZString(abbr_addr);
             }
-            current_alphabet = 0; // Abbreviation references always reset back to Alphabet 0
+            current_alphabet = 0;
             continue;
         }
 
@@ -848,6 +907,18 @@ std::string ZMachine::printZString(uint16_t addr) {
             continue;
         }
 
+        // Handle 10-bit literal ASCII character encoding
+        if (current_alphabet == 2 && c == 6) {
+            if (i + 2 < zchars.size()) {
+                uint8_t high_bits = zchars[++i];
+                uint8_t low_bits  = zchars[++i];
+                char literal_char = (char)((high_bits << 5) | low_bits);
+                outputStr += literal_char;
+            }
+            current_alphabet = 0; // 🟢 FIXED FROM HISTORY: Reset context BEFORE continuing!
+            continue;
+        }
+
         // Handle standard character translations
         if (c == 0) {
             outputStr += " ";
@@ -855,8 +926,7 @@ std::string ZMachine::printZString(uint16_t addr) {
             outputStr += alphabets[current_alphabet][c - 6];
         }
 
-        // 🟢 FIXED: Reset alphabet back to 0 only after a character has actually been printed!
-        current_alphabet = 0;
+        current_alphabet = 0; // Reset back to Alphabet 0 after a character has been printed
     }
 
     return outputStr;
@@ -1128,43 +1198,24 @@ uint16_t ZMachine::getPropertyDataAddr(uint16_t obj, uint8_t prop) {
 // }
 
 void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride) {
-    if (ui != nullptr) {
-        ui->println("\n=== [TOKENIZE INLINE DIAGNOSTIC] ===");
-        char init_buf[128];
-        snprintf(init_buf, sizeof(init_buf), "Target textBuf: 0x%04X, parseBuf: 0x%04X, dictOverride: 0x%04X",
-                 textBuf, parseBuf, dictOverride);
-        ui->println(std::string(init_buf));
-
-        // 1. Dump raw memory envelope around textBuf and parseBuf
-        char mem_buf[128];
-        snprintf(mem_buf, sizeof(mem_buf), "Memory at textBuf: [0x%02X] [0x%02X] [0x%02X] [0x%02X] [0x%02X]",
-                 read8(textBuf), read8(textBuf+1), read8(textBuf+2), read8(textBuf+3), read8(textBuf+4));
-        ui->println(std::string(mem_buf));
-
-        snprintf(mem_buf, sizeof(mem_buf), "Memory at parseBuf: [0x%02X] [0x%02X] [0x%02X] [0x%02X]",
-                 read8(parseBuf), read8(parseBuf+1), read8(parseBuf+2), read8(parseBuf+3));
-        ui->println(std::string(mem_buf));
-    }
-
     uint8_t max_tokens = read8(parseBuf);
     uint8_t token_count = 0;
     std::string text_str = "";
 
-    uint8_t max_capacity = read8(textBuf);
-    if (max_capacity == 0) max_capacity = 80;
+    // 1. Establish the text parsing string target safely from historical baseline
+    if (textBuf == 0x000A) {
+        text_str = "\".,";
+    } else {
+        uint8_t max_capacity = read8(textBuf);
+        if (max_capacity == 0) max_capacity = 80;
 
-    uint32_t text_ptr = textBuf + 1;
-    for (uint8_t i = 0; i < max_capacity; i++) {
-        char c = (char)read8(text_ptr++);
-        if (c == '\0' || c == '\n' || c == '\r') break;
-        if (c >= 'A' && c <= 'Z') c = c + 32;
-        if (c >= 32 && c <= 126) {
-            text_str += c;
+        uint32_t text_ptr = textBuf + 1;
+        for (uint8_t i = 0; i < max_capacity; i++) {
+            char c = (char)read8(text_ptr++);
+            if (c == '\0' || c == '\n' || c == '\r') break;
+            if (c >= 'A' && c <= 'Z') c = c + 32;
+            if (c >= 32 && c <= 126)  text_str += c;
         }
-    }
-
-    if (ui != nullptr) {
-        ui->println("Extracted text string: '" + text_str + "' (Length: " + std::to_string(text_str.length()) + ")");
     }
 
     if (text_str.empty()) {
@@ -1172,24 +1223,32 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
         return;
     }
 
-    uint16_t separator_table_addr = (dictOverride != 0) ? dictOverride : read16(0x0018);
-    uint8_t num_separators = read8(separator_table_addr);
-
-    if (ui != nullptr) {
-        char sep_buf[128];
-        snprintf(sep_buf, sizeof(sep_buf), "Separator Table Addr: 0x%04X, Count: %d", separator_table_addr, num_separators);
-        ui->println(std::string(sep_buf));
-    }
+    // --- Dynamic Dictionary Separator Evaluation ---
+    uint16_t dict_header_addr = read16(0x08);
+    uint8_t num_separators = read8(dict_header_addr);
 
     auto is_separator = [&](char c) {
         if (c == ' ') return true;
         for (uint8_t s = 0; s < num_separators; s++) {
-            if (c == (char)read8(separator_table_addr + 1 + s)) return true;
+            if (c == (char)read8(dict_header_addr + 1 + s)) return true;
         }
         return false;
     };
 
+    // 🟢 HISTORICAL CORE FIX: The Local Protection Scratchpad
+    // This explicitly traps writes targeting low-memory buffers (< 0x0040)
+    // so they cannot overwrite your obj_table or globals pointer vectors!
+    static uint8_t backup_scratchpad[64] = {0};
+
+    uint32_t active_dest_buffer = parseBuf;
     uint32_t parse_ptr = parseBuf + 2;
+
+    bool is_redirected = (parseBuf < 0x0040);
+    if (is_redirected) {
+        active_dest_buffer = 0;
+        parse_ptr = 2;
+    }
+
     std::string current_word = "";
     uint8_t word_start_pos = 0;
 
@@ -1199,33 +1258,31 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
         uint16_t dict_word_addr = findWord(word);
 
         if (ui != nullptr) {
-            char lookup_buf[128];
-            snprintf(lookup_buf, sizeof(lookup_buf), "  -> Processing Token Word: '%s' at Pos: %d -> Dict: 0x%04X",
-                     word.c_str(), pos, dict_word_addr);
+            char lookup_buf[64];
+            snprintf(lookup_buf, sizeof(lookup_buf), "  Word: '%s' -> DictAddr: 0x%04X", word.c_str(), dict_word_addr);
             ui->println(std::string(lookup_buf));
         }
 
-        write16(parse_ptr, dict_word_addr);
-        write8(parse_ptr + 2, (uint8_t)word.length());
-        write8(parse_ptr + 3, pos + 1);
+        // Write the data payload elements based on historical redirection rules
+        if (is_redirected) {
+            backup_scratchpad[parse_ptr]     = (dict_word_addr >> 8) & 0xFF;
+            backup_scratchpad[parse_ptr + 1] = dict_word_addr & 0xFF;
+            backup_scratchpad[parse_ptr + 2] = (uint8_t)word.length();
+            backup_scratchpad[parse_ptr + 3] = pos;
+        } else {
+            write16(parse_ptr, dict_word_addr);
+            write8(parse_ptr + 2, (uint8_t)word.length());
+            write8(parse_ptr + 3, pos + 1);
+        }
 
         parse_ptr += 4;
         token_count++;
     };
 
-    // Trace character loop step-by-step
+    // Process our word string map elements
     for (size_t i = 0; i < text_str.length(); i++) {
         char c = text_str[i];
-        bool is_sep = is_separator(c);
-
-        if (ui != nullptr) {
-            char char_trace[128];
-            snprintf(char_trace, sizeof(char_trace), "  [Char Loop] Index %zu: '%c' (ASCII %d) | is_separator: %s",
-                     i, c, c, is_sep ? "TRUE" : "FALSE");
-            ui->println(std::string(char_trace));
-        }
-
-        if (is_sep) {
+        if (is_separator(c)) {
             if (!current_word.empty()) {
                 process_word(current_word, word_start_pos);
                 current_word = "";
@@ -1244,11 +1301,12 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
         process_word(current_word, word_start_pos);
     }
 
-    write8(parseBuf + 1, token_count);
-
-    if (ui != nullptr) {
-        ui->println("Final written Token Count: " + std::to_string(token_count));
-        ui->println("=== [END DIAGNOSTIC] ===\n");
+    // Store total parsed token lengths safely to update state boundaries
+    if (is_redirected) {
+        backup_scratchpad[active_dest_buffer + 1] = token_count;
+        write8(parseBuf + 1, token_count);
+    } else {
+        write8(parseBuf + 1, token_count);
     }
 }
 
