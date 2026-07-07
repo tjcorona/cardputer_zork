@@ -21,7 +21,7 @@ public:
     std::string decodeDictWord(uint32_t entry_addr);
     void encodeWord(const std::string& word, uint16_t& out_w1, uint16_t& out_w2);
     uint16_t findWord(const std::string& word);
-    void tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride = 0);
+    void tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride = 0, bool is_raw_opcode = false);
 
     // Z-Machine Object Table Engine (Version 3 Specs)
     uint16_t getObjectAddr(uint16_t obj);

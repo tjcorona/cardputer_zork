@@ -326,6 +326,16 @@ void ZMachine::decode() {
         }
     }
 
+    // 🟢 ADD THIS SYSTEM TRACE ELEMENT HERE:
+    // It captures every single instruction name and routing vector right before dispatching
+    if (ui != nullptr) {
+        char flow_buf[128];
+        snprintf(flow_buf, sizeof(flow_buf),
+                 "[FLOW] PC: 0x%04X | Opcode: 0x%02X | Class: %d | OpNum: 0x%02X | Total Args: %d",
+                 current_pc, opcode, op_class, op_num, count);
+        ui->println(std::string(flow_buf));
+    }
+
     // ========================================================================
     // 3. PHASE 3: DISPATCH ROUTING MATRIX (CLASS 0 RESOLVED)
     // ========================================================================
@@ -369,8 +379,31 @@ void ZMachine::decode() {
             return;
         }
         // if (op_num == 0x03) { branch((int16_t)operands[0] > (int16_t)operands[1]); return; } // jg
-        if (op_num == 0x04) { uint8_t v = operands[0]; int16_t val = (int16_t)getVar(v) - 1; setVar(v, val); branch(val < (int16_t)operands[1]); return; } // dec_chk
-        if (op_num == 0x05) { uint8_t v = operands[0]; int16_t val = (int16_t)getVar(v) + 1; setVar(v, val); branch(val > (int16_t)operands[1]); return; } // inc_chk
+	if (op_num == 0x04) { // dec_chk
+	  uint8_t v = operands[0];
+	  int16_t val = (int16_t)getVar(v) - 1;
+	  setVar(v, val);
+
+	  // 🟢 FIXED: Sign extend if the loop boundary was parsed as a small 8-bit constant
+	  int16_t boundary = (int16_t)operands[1];
+	  if (op_types[1] == 1) boundary = (int8_t)operands[1];
+
+	  branch(val < boundary);
+	  return;
+	}
+
+	if (op_num == 0x05) { // inc_chk
+	  uint8_t v = operands[0];
+	  int16_t val = (int16_t)getVar(v) + 1;
+	  setVar(v, val);
+
+	  // 🟢 FIXED: Sign extend if the loop boundary was parsed as a small 8-bit constant
+	  int16_t boundary = (int16_t)operands[1];
+	  if (op_types[1] == 1) boundary = (int8_t)operands[1];
+
+	  branch(val > boundary);
+	  return;
+	}
         if (op_num == 0x06) { branch(getParent(operands[0]) == operands[1]); return; } // jin
         if (op_num == 0x07) { branch((operands[0] & operands[1]) == operands[1]); return; } // test
         if (op_num == 0x08) { uint8_t sv = read8(pc++); setVar(sv, operands[0] | operands[1]); return; } // or
@@ -389,14 +422,6 @@ void ZMachine::decode() {
             uint32_t target_addr = array_base + (word_index * 2);
             uint16_t result_val = read16(target_addr);
 
-            if (ui != nullptr) {
-                char lw_buf[128];
-                snprintf(lw_buf, sizeof(lw_buf),
-                         "[OP_LOADW] Base: 0x%04X, Index: %d -> TargetAddr: 0x%05X -> Read: 0x%04X -> Store into Var: %d",
-                         array_base, word_index, target_addr, result_val, sv);
-                ui->println(std::string(lw_buf));
-            }
-
             setVar(sv, result_val);
             return;
         }
@@ -408,27 +433,36 @@ void ZMachine::decode() {
             uint32_t target_addr = array_base + byte_index;
             uint8_t result_val = read8(target_addr);
 
-            if (ui != nullptr) {
-                char lb_buf[128];
-                snprintf(lb_buf, sizeof(lb_buf),
-                         "[OP_LOADB] Base: 0x%04X, Index: %d -> TargetAddr: 0x%05X -> Read: 0x%02X -> Store into Var: %d",
-                         array_base, byte_index, target_addr, result_val, sv);
-                ui->println(std::string(lb_buf));
-            }
-
             setVar(sv, result_val);
             return;
         }
         if (op_num == 0x11) { // get_prop
             uint8_t sv = read8(pc++);
-            uint16_t result = getPropertyDataAddr(operands[0], operands[1]); // Or your engine's property lookup helper
+            uint16_t obj = operands[0];
+            uint8_t prop = operands[1];
 
-            // 🟢 TARGETED LOG
-            if (result == 0x00A0) {
-                printLog("[GET_PROP TRACE] Obj: %d, Prop: %d -> Read Value: 0x%04X", operands[0], operands[1], result);
+            uint16_t final_value = 0;
+            uint32_t data_addr = getPropertyDataAddr(obj, prop); // Get the raw address inside the object
+
+            if (data_addr == 0) {
+                // 🟢 Property is absent: Read the 16-bit default from the header defaults table
+                // Remember that prop IDs are 1-indexed (1 to 31 in V3)
+                uint32_t default_addr = obj_table + ((prop - 1) * 2);
+                final_value = read16(default_addr);
+            } else {
+                // 🟢 Property is present: Determine its length to read 1 or 2 bytes
+                // In V3, the length byte is located at (data_addr - 1).
+                // Bits 7-5 contain (length - 1), so adding 1 gives the byte length (1 or 2).
+                uint8_t prop_len = (read8(data_addr - 1) >> 5) + 1;
+
+                if (prop_len == 1) {
+                    final_value = read8(data_addr);
+                } else {
+                    final_value = read16(data_addr);
+                }
             }
 
-            setVar(sv, result);
+            setVar(sv, final_value);
             return;
         }
         // if (op_num == 0x11) { uint8_t sv = read8(pc++); setVar(sv, getGlobal(operands[0])); return; } // get_prop
@@ -555,8 +589,31 @@ void ZMachine::decode() {
         if (op_num == 0x02) { uint8_t sv = read8(pc++); uint16_t ch = getChild(operands[0]); setVar(sv, ch); branch(ch != 0); return; }   // get_child
         if (op_num == 0x03) { uint8_t sv = read8(pc++); setVar(sv, getParent(operands[0])); return; } // get_parent
         if (op_num == 0x04) { uint8_t sv = read8(pc++); if (operands[0] == 0) setVar(sv, 0); else setVar(sv, read8((uint32_t)operands[0] - 1) / 32 + 1); return; } // get_prop_len
-        if (op_num == 0x05) { uint8_t var = read8(pc - 1); setVar(var, getVar(var) + 1); return; } // inc
-        if (op_num == 0x06) { uint8_t var = read8(pc - 1); setVar(var, getVar(var) - 1); return; } // dec
+        if (op_num == 0x05) { // inc
+            // 🟢 FIXED: The variable ID was already perfectly parsed into operands[0] during Phase 2!
+            uint8_t var_id = (uint8_t)operands[0];
+
+            // 🟢 FIXED: Stack pointer modification must be done in-place without triggering a pop() frame change
+            if (var_id == 0) {
+                uint16_t current_top = pop();
+                push(current_top + 1);
+            } else {
+                setVar(var_id, getVar(var_id) + 1);
+            }
+            return;
+        }
+
+        if (op_num == 0x06) { // dec
+            uint8_t var_id = (uint8_t)operands[0];
+
+            if (var_id == 0) {
+                uint16_t current_top = pop();
+                push(current_top - 1);
+            } else {
+                setVar(var_id, getVar(var_id) - 1);
+            }
+            return;
+        }
         if (op_num == 0x07) { if (ui != nullptr) ui->print(printZString(operands[0])); return; } // print_addr
         if (op_num == 0x08) { if (ui != nullptr) ui->print(printZString(operands[0] * 2)); return; } // print_paddr
         if (op_num == 0x0A) { if (ui != nullptr) ui->print(getObjectName(operands[0])); return; } // print_obj
@@ -577,24 +634,72 @@ void ZMachine::decode() {
     if (op_class == 2) {
         if (op_num == 0x00) { ret(1); return; } // rtrue
         if (op_num == 0x01) { ret(0); return; } // rfalse
-        if (op_num == 0x02) { if (ui != nullptr) ui->print(printZString(pc)); while (true) { uint16_t word = read16(pc); pc += 2; if (word & 0x8000) break; } return; }
-        if (op_num == 0x03) { if (ui != nullptr) { ui->print(printZString(pc)); ui->println(""); } while (true) { uint16_t word = read16(pc); pc += 2; if (word & 0x8000) break; } ret(1); return; }
-        if (op_num == 0x04) { if (ui != nullptr) ui->println(""); return; } // new_line
-        if (op_num == 0x05) {
-            // In Version 3, save is a conditional branch instruction.
-            // On a headless terminal target, we return 0 (failed/not supported)
-            // so the game safely moves forward past the check loop gates.
-	    // TODO: save!
-            branch(false);
+
+        // 0x02: print
+        if (op_num == 0x02) {
+            if (ui != nullptr) ui->print(printZString(pc));
+            while (true) {
+                uint16_t word = read16(pc);
+                pc += 2;
+                if (word & 0x8000) break;
+            }
             return;
         }
-        if (op_num == 0x07) { ret(0); return; } // rfalse alternate
-        if (op_num == 0x08) { ret(1); return; } // rtrue alternate
-        if (op_num == 0x09) { pop(); return; } // pop
-        if (op_num == 0x0A) { waiting_input = true; return; } // quit
-        if (op_num == 0x0B) { uint16_t val = pop(); ret(val); return; } // ret_popped
+
+        // 0x03: print_ret
+        if (op_num == 0x03) {
+            if (ui != nullptr) {
+                ui->print(printZString(pc));
+                ui->println("");
+            }
+            while (true) {
+                uint16_t word = read16(pc);
+                pc += 2;
+                if (word & 0x8000) break;
+            }
+            ret(1);
+            return;
+        }
+
+        if (op_num == 0x04) { if (ui != nullptr) ui->println(""); return; } // new_line
+
+        // 0x05: save
+        if (op_num == 0x05) {
+            branch(false); // Return failed save state safely for terminal stub
+            return;
+        }
+
+        // 0x06: restore
+        if (op_num == 0x06) {
+            branch(false); // Return failed restore state safely for terminal stub
+            return;
+        }
+
+        // 🟢 FIXED BOUNDARY MAPS:
+        if (op_num == 0x07) { reset(); return; } // 🌟 0x07 is RESTART (Triggers your reset logic)
+        if (op_num == 0x08) { uint16_t val = pop(); ret(val); return; } // 🌟 0x08 is RET_POPPED
+        if (op_num == 0x09) { pop(); return; } // 0x09 is POP
+        if (op_num == 0x0A) { waiting_input = true; return; } // 0x0A is QUIT
+        if (op_num == 0x0B) { waiting_input = true; return; } // 0x0B is an alternate/unused stub or system break
+
+        // 0x0C: show_status (V3 Only)
+        if (op_num == 0x0C) {
+            uint16_t room_obj = getGlobal(0);
+            uint16_t score    = getGlobal(1);
+            uint16_t turns    = getGlobal(2);
+
+            std::string room_name = getObjectName(room_obj);
+
+            char right_buffer[32];
+            snprintf(right_buffer, sizeof(right_buffer), "Score: %d  Turns: %d", score, turns);
+
+            if (ui != nullptr) {
+                ui->setStatus(room_name, std::string(right_buffer));
+            }
+            return;
+        }
+
         if (op_num == 0x0D) { branch(true); return; } // verify
-        if (op_num == 0x0E) { uint16_t val = pop(); push(~val); return; } // not 0OP
     }
 
     // CLASS 3: VARIABLE INSTRUCTIONS (VAR)
@@ -631,20 +736,51 @@ void ZMachine::decode() {
             }
             return;
         }
-        if (op_num == 0x04) { // sread
-            uint16_t text_buffer  = operands[0];
-            uint16_t parse_buffer = operands[1];
+	if (op_num == 0x04) { // sread
+	  uint16_t text_buffer  = operands[0];
+	  uint16_t parse_buffer = operands[1];
 
-            // Resolve unprompted variable boundaries
-            if (text_buffer < 0x0040)  text_buffer  = getVar(text_buffer);
-            if (parse_buffer < 0x0040) parse_buffer = getVar(parse_buffer);
+	  if (text_buffer < 0x0040)  text_buffer  = getVar(text_buffer);
+	  if (parse_buffer < 0x0040) parse_buffer = getVar(parse_buffer);
 
-            cached_text_buffer  = text_buffer;
-            cached_parse_buffer = parse_buffer;
+	  // 🟢 DESKTOP DEBUG HARNESS: Block the Mac terminal synchronously!
+#ifdef NATIVE_DESKTOP
+	  // Force a clean visible prompt line on your Mac terminal
+	  std::cout << "\n> " << std::flush;
 
-            waiting_input = true;
-            return;
-        }
+	  std::string desktop_input;
+	  std::getline(std::cin, desktop_input); // This completely pauses your Mac thread until you type!
+
+	  // Sanitize input to lowercase
+	  std::string clean_input = "";
+	  for (char c : desktop_input) {
+	    if (c >= 'A' && c <= 'Z') c = c + 32;
+	    if (c >= 32 && c <= 126)  clean_input += c;
+	  }
+
+	  uint8_t max_capacity = read8(text_buffer);
+	  if (max_capacity == 0) max_capacity = 80;
+	  if (clean_input.length() > (size_t)(max_capacity - 1)) {
+	    clean_input = clean_input.substr(0, max_capacity - 1);
+	  }
+
+	  // Write out lengths and text directly to emulated system memory
+	  write8(text_buffer + 1, (uint8_t)clean_input.length());
+	  uint32_t text_write_ptr = text_buffer + 2;
+	  for (char c : clean_input) {
+	    write8(text_write_ptr++, (uint8_t)c);
+	  }
+	  write8(text_write_ptr, 0);
+
+	  // Parse the input tokens immediately
+	  tokenize(text_buffer, parse_buffer, 0, false);
+	  waiting_input = false;
+#else
+	  // Your native M5Stack Cardputer asynchronous state flag routine
+	  waiting_input = true;
+#endif
+	  return;
+	}
         if (op_num == 0x05) { if (ui != nullptr) ui->print(getObjectName(operands[0])); return; } // print_obj
         if (op_num == 0x06) {
             int16_t num = (int16_t)operands[0];
@@ -661,25 +797,41 @@ void ZMachine::decode() {
         }
         if (op_num == 0x08) { push(operands[0]); return; } // push
         if (op_num == 0x09) { uint16_t val = pop(); setVar(operands[0], val); return; } // pull
-        if (op_num == 0x0A) {
-            // In Version 3, Global 0 = Room Object ID, Global 1 = Score/Hours, Global 2 = Turns/Minutes
-            uint16_t room_obj = getGlobal(0);
-            uint16_t score    = getGlobal(1);
-            uint16_t turns    = getGlobal(2);
+        // if (op_num == 0x0A) {
+        //     // In Version 3, Global 0 = Room Object ID, Global 1 = Score/Hours, Global 2 = Turns/Minutes
+        //     uint16_t room_obj = getGlobal(0);
+        //     uint16_t score    = getGlobal(1);
+        //     uint16_t turns    = getGlobal(2);
 
-            // Fetch the human-readable text string name of the room object from the game layout
-            std::string room_name = getObjectName(room_obj);
+        //     // Fetch the human-readable text string name of the room object from the game layout
+        //     std::string room_name = getObjectName(room_obj);
 
-            // Format the Score and Turns metrics into a right-aligned display string
-            char right_buffer[32];
-            snprintf(right_buffer, sizeof(right_buffer), "Score: %d  Turns: %d", score, turns);
+        //     // Format the Score and Turns metrics into a right-aligned display string
+        //     char right_buffer[32];
+        //     snprintf(right_buffer, sizeof(right_buffer), "Score: %d  Turns: %d", score, turns);
 
-            // Direct the layout updates straight into your UI tracking properties
-            if (ui != nullptr) {
-                ui->setStatus(room_name, std::string(right_buffer));
-            }
-            return;
-        }
+        //     // Direct the layout updates straight into your UI tracking properties
+        //     if (ui != nullptr) {
+        //         ui->setStatus(room_name, std::string(right_buffer));
+        //     }
+        //     return;
+        // }
+	if (op_num == 0x0A) {
+	  // 🟢 RESTORED: In Version 3, VAR 0x0A is indeed show_status!
+	  uint16_t room_obj = getGlobal(0);
+	  uint16_t score    = getGlobal(1);
+	  uint16_t turns    = getGlobal(2);
+
+	  std::string room_name = getObjectName(room_obj);
+
+	  char right_buffer[32];
+	  snprintf(right_buffer, sizeof(right_buffer), "Score: %d  Turns: %d", score, turns);
+
+	  if (ui != nullptr) {
+	    ui->setStatus(room_name, std::string(right_buffer));
+	  }
+	  return;
+	}
         if (op_num == 0x19) {
             // V3 primarily uses this to silence output to the screen when writing text to memory buffers.
             // For a headless terminal setup, we can safely treat this as an execution pass-through stub.
@@ -697,7 +849,7 @@ void ZMachine::decode() {
 	  uint16_t dict_override = (count > 2) ? operands[2] : 0;
 
 	  // If count specifies a 3rd operand, use it as dictOverride, otherwise pass 0
-	  tokenize(text_buffer, parse_buffer, dict_override);
+	  tokenize(text_buffer, parse_buffer, dict_override, true);
 	  return;
 	}
         if (op_num == 0x1E) {
@@ -769,6 +921,7 @@ uint16_t ZMachine::pop() {
 }
 
 void ZMachine::branch(bool cond) {
+    uint32_t branch_start_pc = pc; // Track for debugging clarity
     uint8_t b1 = read8(pc++);
     bool branch_on_true = (b1 & 0x80) != 0;
     int16_t offset = 0;
@@ -782,10 +935,29 @@ void ZMachine::branch(bool cond) {
         offset = (int16_t)raw_offset;
     }
 
-    if (cond == branch_on_true) {
-        if (offset == 0)      { ret(0); }
-        else if (offset == 1) { ret(1); }
-        else                  { pc = (uint32_t)((int32_t)pc + offset - 2); }
+    bool should_branch = (cond == branch_on_true);
+
+    if (ui != nullptr) {
+        char br_buf[128];
+        snprintf(br_buf, sizeof(br_buf),
+                 "[BRANCH] PC: 0x%04X | Cond Evaluated: %s | Target Expects: %s -> Taken: %s (Offset: %d)",
+                 branch_start_pc, cond ? "TRUE" : "FALSE", branch_on_true ? "TRUE" : "FALSE",
+                 should_branch ? "YES" : "NO", offset);
+        ui->println(std::string(br_buf));
+    }
+
+    if (should_branch) {
+        if (offset == 0) {
+            ret(0);
+        }
+        else if (offset == 1) {
+            ret(1);
+        }
+        else {
+            // 🟢 FIXED: The specification states the offset is added directly
+            // to the PC immediately after the branch bytes are read.
+            pc = (uint32_t)((int32_t)pc + offset - 2);
+        }
     }
 }
 
@@ -1218,21 +1390,34 @@ uint16_t ZMachine::getPropertyDataAddr(uint16_t obj, uint8_t prop) {
 //     }
 // }
 
-void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride) {
+void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride, bool is_raw_opcode) {
     uint8_t max_tokens = read8(parseBuf);
     uint8_t token_count = 0;
     std::string text_str = "";
 
-    // 1. Establish the text parsing string target safely from historical baseline
-    uint8_t max_capacity = read8(textBuf);
-    if (max_capacity == 0) max_capacity = 80;
+    // 1. Establish the text parsing string target safely based on buffer style
+    if (is_raw_opcode) {
+        // 🟢 FIXED: The tokenise opcode points directly to raw ASCII characters!
+        // We parse until we hit a terminal or standard length bounds (typically up to 80 chars)
+        uint32_t text_ptr = textBuf;
+        for (int i = 0; i < 80; i++) {
+            char c = (char)read8(text_ptr++);
+            if (c == '\0' || c == '\n' || c == '\r') break;
+            if (c >= 'A' && c <= 'Z') c = c + 32;
+            if (c >= 32 && c <= 126)  text_str += c;
+        }
+    } else {
+        // Standard sread style buffer layout path
+        uint8_t max_capacity = read8(textBuf);
+        if (max_capacity == 0) max_capacity = 80;
 
-    uint32_t text_ptr = textBuf + 1;
-    for (uint8_t i = 0; i < max_capacity; i++) {
-      char c = (char)read8(text_ptr++);
-      if (c == '\0' || c == '\n' || c == '\r') break;
-      if (c >= 'A' && c <= 'Z') c = c + 32;
-      if (c >= 32 && c <= 126)  text_str += c;
+        uint32_t text_ptr = textBuf + 1;
+        for (uint8_t i = 0; i < max_capacity; i++) {
+            char c = (char)read8(text_ptr++);
+            if (c == '\0' || c == '\n' || c == '\r') break;
+            if (c >= 'A' && c <= 'Z') c = c + 32;
+            if (c >= 32 && c <= 126)  text_str += c;
+        }
     }
 
     if (text_str.empty()) {
@@ -1241,7 +1426,8 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
     }
 
     // --- Dynamic Dictionary Separator Evaluation ---
-    uint16_t dict_header_addr = read16(0x08);
+    // If a dictionary override is supplied and valid, use it; otherwise fall back to header defaults
+    uint16_t dict_header_addr = (dictOverride != 0) ? dictOverride : read16(0x08);
     uint8_t num_separators = read8(dict_header_addr);
 
     auto is_separator = [&](char c) {
@@ -1289,7 +1475,8 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
         } else {
             write16(parse_ptr, dict_word_addr);
             write8(parse_ptr + 2, (uint8_t)word.length());
-            write8(parse_ptr + 3, pos + 1);
+            // Adjust position formatting for sread vs raw tokenise offsets if needed
+            write8(parse_ptr + 3, is_raw_opcode ? pos : pos + 1);
         }
 
         parse_ptr += 4;
