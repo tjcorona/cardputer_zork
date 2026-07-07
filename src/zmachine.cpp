@@ -136,14 +136,12 @@ void ZMachine::reset() {
     fp = 0;
     waiting_input = false;
 
-    pc         = read16(0x06);
+    pc         = read16(0x06); // Correct: Initial Program Counter
 
-    // 🟢 HISTORICAL RESTORATION BOUNDARIES:
-    // Revert these back to the raw file offset parameters.
-    // This immediately restores your cohesive status bar header bar!
-    dictionary = read16(0x18);
-    obj_table  = read16(0x0A);
-    globals    = read16(0x0C);
+    // 🟢 FIXED BOUNDARY MAPS: Target the exact architectural offsets
+    dictionary = read16(0x08); // 🌟 CHANGED FROM 0x18 TO 0x08
+    obj_table  = read16(0x0A); // Correct: Object Table Base
+    globals    = read16(0x0C); // Correct: Global Variables Table Base
 
     if (ui != nullptr) {
         char reset_buf[128];
@@ -335,15 +333,30 @@ void ZMachine::decode() {
     // CLASS 0: TWO-OPERAND INSTRUCTIONS (2OP)
     if (op_class == 0) {
         if (op_num == 0x00 || op_num == 0x0D) { setVar(operands[0], operands[1]); return; } // store
-        if (op_num == 0x01) { // je
-            // 🟢 TARGETED DIAGNOSTIC TRACE
-            if (pc >= 0x5490 && pc <= 0x54A0) {
-                printLog("[JE TRACE] PC: 0x%04X | Comparing: 0x%04X == 0x%04X",
-                         pc - 1, operands[0], operands[1]);
-            }
-            branch(operands[0] == operands[1]);
-            return;
-        }
+	if (op_num == 0x01) { // je
+	  bool match = false;
+
+	  // je matches if the first operand is equal to ANY of the others
+	  if (count <= 2) {
+	    match = (operands[0] == operands[1]);
+	  } else {
+	    for (int i = 1; i < count; i++) {
+	      if (operands[0] == operands[i]) {
+                match = true;
+                break;
+	      }
+	    }
+	  }
+
+	  // 🟢 TARGETED DIAGNOSTIC TRACE
+	  if (pc >= 0x5490 && pc <= 0x54A0) {
+	    printLog("[JE TRACE] PC: 0x%04X | Checked %d args | Match: %s",
+		     pc - 1, count, match ? "TRUE" : "FALSE");
+	  }
+
+	  branch(match);
+	  return;
+	}
         // if (op_num == 0x01) { branch(operands[0] == operands[1]); return; } // je
         if (op_num == 0x02) { branch((int16_t)operands[0] < (int16_t)operands[1]); return; } // jl
         if (op_num == 0x03) { // jg
@@ -678,7 +691,15 @@ void ZMachine::decode() {
 	  // TODO: color would be really cool
             return;
         }
-        if (op_num == 0x1B) { return; } // tokenise stub
+	if (op_num == 0x1B) { // tokenise
+	  uint16_t text_buffer  = operands[0];
+	  uint16_t parse_buffer = operands[1];
+	  uint16_t dict_override = (count > 2) ? operands[2] : 0;
+
+	  // If count specifies a 3rd operand, use it as dictOverride, otherwise pass 0
+	  tokenize(text_buffer, parse_buffer, dict_override);
+	  return;
+	}
         if (op_num == 0x1E) {
             // Split screen divides the status bar window from the scrolling text region.
             // On a terminal target, we handle this formatting automatically in ui.render(),
@@ -856,7 +877,7 @@ std::string ZMachine::printZString(uint16_t addr) {
     const char* alphabets[3] = {
         "abcdefghijklmnopqrstuvwxyz",
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-        "  \n0123456789.,!?_#'\"/\\-:()"
+        " \n0123456789.,!?_#'\"/\\-:()"
     };
 
     std::vector<uint8_t> zchars;
@@ -1203,19 +1224,15 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
     std::string text_str = "";
 
     // 1. Establish the text parsing string target safely from historical baseline
-    if (textBuf == 0x000A) {
-        text_str = "\".,";
-    } else {
-        uint8_t max_capacity = read8(textBuf);
-        if (max_capacity == 0) max_capacity = 80;
+    uint8_t max_capacity = read8(textBuf);
+    if (max_capacity == 0) max_capacity = 80;
 
-        uint32_t text_ptr = textBuf + 1;
-        for (uint8_t i = 0; i < max_capacity; i++) {
-            char c = (char)read8(text_ptr++);
-            if (c == '\0' || c == '\n' || c == '\r') break;
-            if (c >= 'A' && c <= 'Z') c = c + 32;
-            if (c >= 32 && c <= 126)  text_str += c;
-        }
+    uint32_t text_ptr = textBuf + 1;
+    for (uint8_t i = 0; i < max_capacity; i++) {
+      char c = (char)read8(text_ptr++);
+      if (c == '\0' || c == '\n' || c == '\r') break;
+      if (c >= 'A' && c <= 'Z') c = c + 32;
+      if (c >= 32 && c <= 126)  text_str += c;
     }
 
     if (text_str.empty()) {
@@ -1346,8 +1363,6 @@ void ZMachine::encodeWord(const std::string& word, uint16_t& out_w1, uint16_t& o
 }
 
 std::string ZMachine::decodeDictWord(uint32_t entry_addr) {
-    // In Z-Machine Version 3, dictionary words are stored strictly
-    // in exactly 2 Big-Endian words (4 bytes total).
     uint16_t word1 = read16(entry_addr);
     uint16_t word2 = read16(entry_addr + 2);
 
@@ -1359,10 +1374,11 @@ std::string ZMachine::decodeDictWord(uint32_t entry_addr) {
     zchars.push_back((word2 >> 5)  & 0x1F);
     zchars.push_back(word2         & 0x1F);
 
+    // Standard architectural V3 layout maps
     const char* alphabets[3] = {
-        "abcdefghijklmnopqrstuvwxyz",
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-        " \n0123456789.,!?_#'\"/\\-:()"
+        "abcdefghijklmnopqrstuvwxyz", // A0
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ", // A1
+        " \n0123456789.,!?_#'\"/\\-:()"  // A2
     };
 
     int alphabet = 0;
@@ -1371,7 +1387,7 @@ std::string ZMachine::decodeDictWord(uint32_t entry_addr) {
     for (size_t i = 0; i < zchars.size(); i++) {
         uint8_t c = zchars[i];
 
-        // Version 3 dictionary entries never contain embedded nested macro abbreviations (1, 2, 3)
+        // 🟢 FIXED: Dictionary shifts are lock-shifts! Don't use a single-shot reset.
         if (c == 4) { alphabet = 1; continue; }
         if (c == 5) { alphabet = 2; continue; }
 
@@ -1382,10 +1398,10 @@ std::string ZMachine::decodeDictWord(uint32_t entry_addr) {
                 outputStr += alphabets[alphabet][c - 6];
             }
         }
-        alphabet = 0;
+        // 🌟 REMOVED: alphabet = 0;
+        // This lets the alphabet persist for subsequent characters in dictionary decoding!
     }
 
-    // Cleanly strip out trailing layout padding spaces
     while (!outputStr.empty() && outputStr.back() == ' ') {
         outputStr.pop_back();
     }
