@@ -15,7 +15,6 @@ public:
     // UI and IO Hooks
     bool needsInput();
     void provideInput(const std::string& input);
-    void updateStatus(UI& ui);
 
     // Dictionary and Text Tokenization
     std::string decodeDictWord(uint32_t entry_addr);
@@ -24,7 +23,7 @@ public:
     void tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride = 0, bool is_raw_opcode = false);
 
     // Z-Machine Object Table Engine (Version 3 Specs)
-    uint16_t getObjectAddr(uint16_t obj);
+    uint32_t getObjectAddr(uint16_t obj);
     uint8_t getAttr(uint16_t obj, int attr);
     void setAttr(uint16_t obj, int attr);
     void clearAttr(uint16_t obj, int attr);
@@ -105,7 +104,7 @@ private:
     uint32_t unpackAddress(uint16_t packed_addr);
 
     // Z-String Processing
-    std::string printZString(uint16_t addr);
+  std::string printZString(uint32_t addr, uint32_t* next_addr = nullptr);
 
     uint16_t getPropertyDataAddr(uint16_t obj, uint8_t prop);
 };

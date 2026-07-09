@@ -33,11 +33,8 @@ bool ZMachine::load(const char* path, UI& uiRef) {
     ui = &uiRef;
 
     #ifdef NATIVE_DESKTOP
-        if (ui != nullptr) ui->println("[DBG] Target identified: NATIVE_DESKTOP. Attempting file read...");
-
         std::ifstream file(path, std::ios::in | std::ios::binary);
         if (!file.is_open()) {
-            if (ui != nullptr) ui->println("[DBG] File open failed: Path invalid or unreadable.");
             return false;
         }
 
@@ -46,35 +43,19 @@ bool ZMachine::load(const char* path, UI& uiRef) {
         file.close();
 
         if (mem.empty()) {
-            if (ui != nullptr) ui->println("[DBG] File assign failed: Stream evaluated to empty vector.");
             return false;
-        }
-
-        if (ui != nullptr) {
-            ui->println("[DBG] Vector assignment success. Size: " + std::to_string(mem.size()) + " bytes.");
-            ui->println("\n=== [CORE MEMORY VERIFICATION] ===");
-            char header_check[128];
-            snprintf(header_check, sizeof(header_check),
-                     "Byte 0 (Version): %d | Bytes 2-3 (Release): 0x%04X | Bytes 24-25 (Dict): 0x%04X",
-                     mem[0], (uint16_t)((mem[2] << 8) | mem[3]), (uint16_t)((mem[0x18] << 8) | mem[0x19]));
-            ui->println(std::string(header_check));
-            ui->println("===================================\n");
         }
 
         reset();
         return true;
     #else
-        if (ui != nullptr) ui->println("[DBG] Target identified: PHYSICAL HARDWARE. Polling SD reader...");
-
         File file = SD.open(path, FILE_READ);
         if (!file) {
-            if (ui != nullptr) ui->println("[DBG] SD open failed: File handle unallocated.");
             return false;
         }
 
         size_t size = file.size();
         if (size == 0) {
-            if (ui != nullptr) ui->println("[DBG] SD size error: File size evaluates to 0.");
             file.close();
             return false;
         }
@@ -83,55 +64,16 @@ bool ZMachine::load(const char* path, UI& uiRef) {
         file.read(mem.data(), size);
         file.close();
 
-        if (ui != nullptr) {
-            ui->println("[DBG] SD read success. Vector populated to size: " + std::to_string(mem.size()) + " bytes.");
-            ui->println("\n=== [CORE MEMORY VERIFICATION] ===");
-            char header_check[128];
-            snprintf(header_check, sizeof(header_check),
-                     "Byte 0 (Version): %d | Bytes 2-3 (Release): 0x%04X | Bytes 24-25 (Dict): 0x%04X",
-                     mem[0], (uint16_t)((mem[2] << 8) | mem[3]), (uint16_t)((mem[0x18] << 8) | mem[0x19]));
-            ui->println(std::string(header_check));
-            ui->println("===================================\n");
-        }
-
         reset();
         return true;
     #endif
 }
-
-// void ZMachine::step() {
-//     uint32_t current_pc = pc;
-//     uint8_t opcode = read8(pc);
-
-//     hist_pc[hist_idx] = current_pc;
-//     hist_op[hist_idx] = opcode;
-
-//     // printLog("[OP] PC: 0x%04X, Opcode: 0x%02X", current_pc, opcode);
-
-//     if ((opcode & 0x80) == 0) {
-//         hist_cls[hist_idx] = 0;
-//         hist_num[hist_idx] = opcode & 0x1F;
-//     } else if ((opcode & 0xC0) == 0x80) {
-//         hist_cls[hist_idx] = ((opcode >> 4) & 0x03) == 0x03 ? 2 : 1;
-//         hist_num[hist_idx] = opcode & 0x0F;
-//     } else {
-//         hist_cls[hist_idx] = (opcode & 0x20) ? 3 : 0;
-//         hist_num[hist_idx] = opcode & 0x1F;
-//     }
-
-//     hist_idx = (hist_idx + 1) % 32;
-//     total_executed_ops++;
-
-//     decode();
-// }
 
 void ZMachine::step() {
     decode();
 }
 
 void ZMachine::reset() {
-    if (ui != nullptr) ui->println("[RESET START] Initializing engine state...");
-
     sp = 0;
     fp = 0;
     waiting_input = false;
@@ -143,16 +85,8 @@ void ZMachine::reset() {
     obj_table  = read16(0x0A); // Correct: Object Table Base
     globals    = read16(0x0C); // Correct: Global Variables Table Base
 
-    if (ui != nullptr) {
-        char reset_buf[128];
-        snprintf(reset_buf, sizeof(reset_buf),
-                 "[RESET ADDR] pc: 0x%04X | dict: 0x%04X | objects: 0x%04X | globals: 0x%04X",
-                 pc, dictionary, obj_table, globals);
-        ui->println(std::string(reset_buf));
-    }
-
-    if (ui != nullptr) ui->println("[RESET DBG] Moving past header variable definitions...");
-    if (ui != nullptr) ui->println("[RESET SUCCESS] Engine reset sequence completed.");
+    printLog("[FILE HEADER CHECK] Bytes 0-3: 0x%02X 0x%02X 0x%02X 0x%02X\n",
+	     mem[0], mem[1], mem[2], mem[3]);
 }
 
 void ZMachine::run() {
@@ -165,38 +99,52 @@ bool ZMachine::needsInput() {
     return waiting_input;
 }
 
-void ZMachine::provideInput(const std::string& input) {
-    waiting_input = false;
+// void ZMachine::provideInput(const std::string& input) {
+//     waiting_input = false;
 
-    // Direct use of our newly isolated execution addresses
-    uint32_t text_buffer  = cached_text_buffer;
-    uint32_t parse_buffer = cached_parse_buffer;
+//     // Direct use of our newly isolated execution addresses
+//     uint32_t text_buffer  = cached_text_buffer;
+//     uint32_t parse_buffer = cached_parse_buffer;
 
-    if (text_buffer == 0)  text_buffer = 0x0200;
-    if (parse_buffer == 0) parse_buffer = 0x0300;
+//     if (text_buffer == 0)  text_buffer = 0x0200;
+//     if (parse_buffer == 0) parse_buffer = 0x0300;
 
-    uint8_t max_chars = read8(text_buffer);
-    if (max_chars == 0) max_chars = 80;
+//     uint8_t max_chars = read8(text_buffer);
+//     if (max_chars == 0) max_chars = 80;
 
-    uint32_t write_ptr = text_buffer + 1;
-    uint8_t chars_written = 0;
+//     uint32_t write_ptr = text_buffer + 1;
+//     uint8_t chars_written = 0;
 
-    for (char c : input) {
-        if (chars_written >= max_chars - 1) break;
-        char lower_c = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
-        write8(write_ptr++, lower_c);
-        chars_written++;
+//     for (char c : input) {
+//         if (chars_written >= max_chars - 1) break;
+//         char lower_c = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+//         write8(write_ptr++, lower_c);
+//         chars_written++;
+//     }
+//     write8(write_ptr, 0);
+
+//     tokenize(text_buffer, parse_buffer);
+// }
+
+void ZMachine::provideInput(const std::string& typed_input) {
+    // 1. Identify your text buffer address (cached_text_buffer)
+    uint32_t text_ptr = cached_text_buffer + 1; // Or textBuf + 2 depending on your version layout
+
+    // 2. Clear out any old lingering data bytes to prevent token pollution
+    for (int i = 0; i < 80; i++) {
+        write8(cached_text_buffer + 1 + i, 0);
     }
-    write8(write_ptr, 0);
 
-    tokenize(text_buffer, parse_buffer);
-}
+    // 3. Copy your clean typed input string into memory
+    for (char c : typed_input) {
+        if (c >= 'A' && c <= 'Z') c = c + 32; // Lowercase enforcement
+        write8(text_ptr++, c);
+    }
+    write8(text_ptr, '\0'); // 🟢 Force strict termination!
 
-void ZMachine::updateStatus(UI& ui) {
-    uint16_t roomObj = getGlobal(0);
-    std::string roomName = getObjectName(roomObj);
-    uint16_t score = getGlobal(1);
-    uint16_t turns = getGlobal(2);
+    // 4. Tokenize the freshly isolated buffer
+    tokenize(cached_text_buffer, cached_parse_buffer, 0, false);
+    waiting_input = false;
 }
 
 // ============================================================================
@@ -277,6 +225,7 @@ void ZMachine::decode() {
     // C. VARIABLE FORM (Bit 7 == 1, Bit 6 == 1)
     else {
         op_num = opcode & 0x1F;
+
         if (opcode & 0x20) {
             op_class = 3; // VAR Form
         } else {
@@ -326,15 +275,15 @@ void ZMachine::decode() {
         }
     }
 
-    // 🟢 ADD THIS SYSTEM TRACE ELEMENT HERE:
-    // It captures every single instruction name and routing vector right before dispatching
-    if (ui != nullptr) {
-        char flow_buf[128];
-        snprintf(flow_buf, sizeof(flow_buf),
-                 "[FLOW] PC: 0x%04X | Opcode: 0x%02X | Class: %d | OpNum: 0x%02X | Total Args: %d",
-                 current_pc, opcode, op_class, op_num, count);
-        ui->println(std::string(flow_buf));
-    }
+    // // 🟢 ADD THIS SYSTEM TRACE ELEMENT HERE:
+    // // It captures every single instruction name and routing vector right before dispatching
+    // if (ui != nullptr) {
+    //     char flow_buf[128];
+    //     snprintf(flow_buf, sizeof(flow_buf),
+    //              "[FLOW] PC: 0x%04X | Opcode: 0x%02X | Class: %d | OpNum: 0x%02X | Total Args: %d",
+    //              current_pc, opcode, op_class, op_num, count);
+    //     ui->println(std::string(flow_buf));
+    // }
 
     // ========================================================================
     // 3. PHASE 3: DISPATCH ROUTING MATRIX (CLASS 0 RESOLVED)
@@ -358,23 +307,12 @@ void ZMachine::decode() {
 	    }
 	  }
 
-	  // 🟢 TARGETED DIAGNOSTIC TRACE
-	  if (pc >= 0x5490 && pc <= 0x54A0) {
-	    printLog("[JE TRACE] PC: 0x%04X | Checked %d args | Match: %s",
-		     pc - 1, count, match ? "TRUE" : "FALSE");
-	  }
-
 	  branch(match);
 	  return;
 	}
         // if (op_num == 0x01) { branch(operands[0] == operands[1]); return; } // je
         if (op_num == 0x02) { branch((int16_t)operands[0] < (int16_t)operands[1]); return; } // jl
         if (op_num == 0x03) { // jg
-            if (pc >= 0x4E40 && pc <= 0x4E55) {
-                printLog("[JG DEBUG] PC: 0x%04X | Op0: %d, Op1: %d | Evaluation: %d",
-                         pc - 1, (int16_t)operands[0], (int16_t)operands[1],
-                         (int16_t)operands[0] > (int16_t)operands[1]);
-            }
             branch((int16_t)operands[0] > (int16_t)operands[1]);
             return;
         }
@@ -559,17 +497,19 @@ void ZMachine::decode() {
             uint16_t parse_buffer = operands[1];
             uint16_t dict_override = (count > 2) ? operands[2] : 0;
 
-            // 1. Resolve local stack variable indexes if needed
-            if (text_buffer < 0x0040)  text_buffer  = getVar(text_buffer);
-            if (parse_buffer < 0x0040) parse_buffer = getVar(parse_buffer);
-            if (dict_override < 0x0040 && dict_override != 0) dict_override = getVar(dict_override);
+	    std::cout<<"[VAR DBG] op 0x1B: text_buffer, parse_buffer, dict_override: "<<text_buffer<<" "<<parse_buffer<<" "<<dict_override<<std::endl;
 
-            // 🟢 CRITICAL STACK ROUTINE PROTECTION OVERRIDE:
-            // If the local variable frame extraction engine dropped out or evaluated to 0,
-            // we must reroute the pointers to the literal location of the Zork V3 initial
-            // text parameters list and parse destination matrices to bypass the stack framework error!
-            if (text_buffer == 0)  text_buffer  = 0x01E4; // Standard layout offset for game punctuation list
-            if (parse_buffer == 0) parse_buffer = 0x01E8; // Clean, non-destructive initial parse array pointer
+            // // 1. Resolve local stack variable indexes if needed
+            // if (text_buffer < 0x0040)  text_buffer  = getVar(text_buffer);
+            // if (parse_buffer < 0x0040) parse_buffer = getVar(parse_buffer);
+            // if (dict_override < 0x0040 && dict_override != 0) dict_override = getVar(dict_override);
+
+            // // 🟢 CRITICAL STACK ROUTINE PROTECTION OVERRIDE:
+            // // If the local variable frame extraction engine dropped out or evaluated to 0,
+            // // we must reroute the pointers to the literal location of the Zork V3 initial
+            // // text parameters list and parse destination matrices to bypass the stack framework error!
+            // if (text_buffer == 0)  text_buffer  = 0x01E4; // Standard layout offset for game punctuation list
+            // if (parse_buffer == 0) parse_buffer = 0x01E8; // Clean, non-destructive initial parse array pointer
 
             // Call tokenization on the true RAM buffers!
             tokenize(text_buffer, parse_buffer, dict_override);
@@ -614,79 +554,138 @@ void ZMachine::decode() {
             }
             return;
         }
-        if (op_num == 0x07) { if (ui != nullptr) ui->print(printZString(operands[0])); return; } // print_addr
-        if (op_num == 0x08) { if (ui != nullptr) ui->print(printZString(operands[0] * 2)); return; } // print_paddr
-        if (op_num == 0x0A) { if (ui != nullptr) ui->print(getObjectName(operands[0])); return; } // print_obj
+if (op_num == 0x07) {
+    if (ui != nullptr) {
+        // ui->print(printZString(unpackAddress(operands[0])));
+      // printLog("[1OP DBG] op 0x07: 0x%02X %s\n", operands[0], printZString(operands[0]));
+      std::cout<<"[1OP DBG] op 0x07: "<<operands[0]<<" "<<printZString(operands[0])<<std::endl;
+      ui->print(printZString(operands[0]));
+    }
+    return;
+}
+if (op_num == 0x0A) {
+    if (ui != nullptr) {
+      // printLog("[1OP DBG] op 0x08: 0x%02X %s\n", operands[0], getObjectName(operands[0]));
+      std::cout<<"[1OP DBG] op 0x08: "<<operands[0]<<" "<<getObjectName(operands[0])<<std::endl;
+        ui->print(getObjectName(operands[0]));
+    }
+    return;
+}
         if (op_num == 0x0B) { ret(operands[0]); return; } // ret
-        if (op_num == 0x0C) { pc = (uint32_t)((int32_t)pc + (int16_t)operands[0] - 2); return; } // jump
+
+        if (op_num == 0x0C) { // 1OP 0x0C: jump
+            int16_t offset = (int16_t)operands[0];
+
+            // If the operand was a small constant (1 byte), sign-extend its 8-bit value natively
+            if (op_types[0] == 1) {
+                offset = (int8_t)operands[0];
+            }
+
+            // In a standard jump opcode, the offset is relative to the instruction following the jump.
+            // Since Phase 2 evaluation has already advanced pc past the operand bytes,
+            // we simply add the offset directly without subtracting 2 (unlike branch offsets)!
+            pc = (uint32_t)((int32_t)pc + offset - 2);
+            return;
+        }
         if (op_num == 0x0E) {
             removeObj(operands[0]); // Lift the item cleanly out of its parent tree context
             return;
         }
-        if (op_num == 0x0F || op_num == 0x0D) {
-            uint8_t sv = read8(pc++);
-            setVar(sv, ~operands[0]); // Bitwise NOT inversion execution block
-            return;
-        }
+if (op_num == 0x0F || op_num == 0x0D) {
+    uint8_t sv = read8(pc++);
+
+    // 🟢 CRITICAL SYSTEM PARITY FIX:
+    // Explicitly mask the inverted result with 0xFFFF to drop high native compiler bits!
+    uint16_t fixed_not_value = (uint16_t)(~operands[0] & 0xFFFF);
+
+    setVar(sv, fixed_not_value);
+    return;
+}
     }
 
     // CLASS 2: ZERO-OPERAND INSTRUCTIONS (0OP)
     if (op_class == 2) {
+      printLog("[0OP DBG] Opcode: 0x%02X PC: 0x%02X\n",op_num, pc);
+
         if (op_num == 0x00) { ret(1); return; } // rtrue
         if (op_num == 0x01) { ret(0); return; } // rfalse
 
-        // 0x02: print
-        if (op_num == 0x02) {
-            if (ui != nullptr) ui->print(printZString(pc));
-            while (true) {
-                uint16_t word = read16(pc);
-                pc += 2;
-                if (word & 0x8000) break;
-            }
-            return;
-        }
+// if (op_num == 0x02) { // 0OP: print
+//     // Print the inline string starting at the current PC
+//     if (ui != nullptr) {
+//       std::cout<<"[0OP DBG] op 0x02: "<<pc<<" "<<printZString(pc)<<std::endl;
+//       ui->print(printZString(pc));
+//     }
 
-        // 0x03: print_ret
-        if (op_num == 0x03) {
-            if (ui != nullptr) {
-                ui->print(printZString(pc));
-                ui->println("");
-            }
-            while (true) {
-                uint16_t word = read16(pc);
-                pc += 2;
-                if (word & 0x8000) break;
-            }
-            ret(1);
-            return;
-        }
+//     // Advance PC past the inline string words cleanly
+//     while (true) {
+//         uint8_t b1 = read8(pc++);
+//         uint8_t b2 = read8(pc++);
+//         if (b1 & 0x80) break;
+//     }
+//     return;
+// }
 
-        if (op_num == 0x04) { if (ui != nullptr) ui->println(""); return; } // new_line
+if (op_num == 0x02) { // 0OP: print
+    uint32_t next_pc = pc;
+    // Pass &next_pc as the second argument to receive the advanced address
+    std::string text = printZString(pc, &next_pc);
 
+    if (ui != nullptr) {
+        std::cout << "[0OP DBG] op 0x02: " << pc << " " << text << std::endl;
+        ui->print(text);
+    }
+
+    // Safely jump the PC to the end of the text string
+    pc = next_pc;
+    return;
+}
+
+if (op_num == 0x03) { // 0OP: print_ret
+    // Print the inline string starting at the current PC, then add newline
+    if (ui != nullptr) {
+      std::cout<<"[0OP DBG] op 0x03: "<<pc<<" "<<printZString(pc)<<std::endl;
+        ui->print(printZString(pc));
+        ui->println("");
+    }
+
+    // Advance PC past the inline string words cleanly
+    while (true) {
+        uint8_t b1 = read8(pc++);
+        uint8_t b2 = read8(pc++);
+        if (b1 & 0x80) break;
+    }
+
+    // Immediately exit the current frame returning a truthy 1
+    ret(1);
+    return;
+}
+        if (op_num == 0x04) { return; } // 🟢 0x04 is a NOP / Not Used in V3
         // 0x05: save
         if (op_num == 0x05) {
-            branch(false); // Return failed save state safely for terminal stub
+            branch(false);
             return;
         }
-
         // 0x06: restore
         if (op_num == 0x06) {
-            branch(false); // Return failed restore state safely for terminal stub
+            branch(false);
             return;
         }
-
-        // 🟢 FIXED BOUNDARY MAPS:
-        if (op_num == 0x07) { reset(); return; } // 🌟 0x07 is RESTART (Triggers your reset logic)
-        if (op_num == 0x08) { uint16_t val = pop(); ret(val); return; } // 🌟 0x08 is RET_POPPED
+        if (op_num == 0x07) { reset(); return; } // 0x07 is RESTART
+        if (op_num == 0x08) { uint16_t val = pop(); ret(val); return; } // 0x08 is RET_POPPED
         if (op_num == 0x09) { pop(); return; } // 0x09 is POP
         if (op_num == 0x0A) { waiting_input = true; return; } // 0x0A is QUIT
-        if (op_num == 0x0B) { waiting_input = true; return; } // 0x0B is an alternate/unused stub or system break
-
+        if (op_num == 0x0B) {
+	  if (ui != nullptr) ui->println("");
+	  return;
+        }
         // 0x0C: show_status (V3 Only)
         if (op_num == 0x0C) {
             uint16_t room_obj = getGlobal(0);
             uint16_t score    = getGlobal(1);
             uint16_t turns    = getGlobal(2);
+
+	    printLog("[0OP DBG] Opcode: 0x0C | room_obj, score, turns: %d %d %d", room_obj, score, turns);
 
             std::string room_name = getObjectName(room_obj);
 
@@ -700,11 +699,27 @@ void ZMachine::decode() {
         }
 
         if (op_num == 0x0D) { branch(true); return; } // verify
+
+	if (op_num == 0x0F) { // 0OP 0x0F (0xBF): piracy
+	  // In standard Zork I V3 games, piracy is always a branch instruction.
+	  // It is followed immediately by 1 or 2 branch offset bytes.
+
+	  // Read the branch configuration byte
+	  uint8_t branch_byte = read8(pc++);
+
+	  if ((branch_byte & 0x40) == 0) {
+	    // If bit 6 is 0, the branch offset is a full 14-bit signed number (consumes 2 bytes)
+	    pc++; // Skip the second offset byte to keep the PC synchronized
+	  }
+
+	  // Force evaluate the loop to fall forward cleanly
+	  branch(true);
+	  return;
+	}
     }
 
     // CLASS 3: VARIABLE INSTRUCTIONS (VAR)
     if (op_class == 3) {
-        // Inside your if (op_class == 3) block in zmachine.cpp:
         if (op_num == 0x00) { // call
             uint16_t routine_packed = operands[0];
 
@@ -736,59 +751,116 @@ void ZMachine::decode() {
             }
             return;
         }
-	if (op_num == 0x04) { // sread
-	  uint16_t text_buffer  = operands[0];
-	  uint16_t parse_buffer = operands[1];
 
-	  if (text_buffer < 0x0040)  text_buffer  = getVar(text_buffer);
-	  if (parse_buffer < 0x0040) parse_buffer = getVar(parse_buffer);
+if (op_num == 0x04) { // sread
+    uint16_t text_buffer  = operands[0];
+    uint16_t parse_buffer = operands[1];
 
-	  // 🟢 DESKTOP DEBUG HARNESS: Block the Mac terminal synchronously!
-#ifdef NATIVE_DESKTOP
-	  // Force a clean visible prompt line on your Mac terminal
-	  std::cout << "\n> " << std::flush;
+    // 1. Force the UI layer to flush what it has drawn so far (the prompt)
+    if (ui != nullptr) ui->render();
 
-	  std::string desktop_input;
-	  std::getline(std::cin, desktop_input); // This completely pauses your Mac thread until you type!
+    // 2. BLOCK COMPLETELY until the user types their command
+    std::string input;
+    if (std::getline(std::cin, input)) {
+        // Normalize characters to lowercase
+        for (char &c : input) if (c >= 'A' && c <= 'Z') c += 32;
 
-	  // Sanitize input to lowercase
-	  std::string clean_input = "";
-	  for (char c : desktop_input) {
-	    if (c >= 'A' && c <= 'Z') c = c + 32;
-	    if (c >= 32 && c <= 126)  clean_input += c;
+        // 3. Write data strictly following standard V3 sread memory specs
+        // Byte 0 is already max capacity (usually 78) - leave it alone!
+        uint8_t max_chars = read8(text_buffer);
+        if (input.length() > max_chars) input = input.substr(0, max_chars);
+
+        // In V3 sread, characters start at offset +1 and end with a null terminator
+        for (size_t i = 0; i < input.length(); i++) {
+            write8(text_buffer + 1 + i, input[i]);
+        }
+        write8(text_buffer + 1 + input.length(), '\0'); // Terminating byte
+
+        // 4. CRITICAL: The V3 sread instruction explicitly calls internal tokenize automatically!
+        tokenize(text_buffer, parse_buffer, 0);
+    }
+    return;
+}
+// 	if (op_num == 0x04) { // sread
+// 	  uint16_t text_buffer  = operands[0];
+// 	  uint16_t parse_buffer = operands[1];
+
+// 	  // if (text_buffer < 0x0040)  text_buffer  = getVar(text_buffer);
+// 	  // if (parse_buffer < 0x0040) parse_buffer = getVar(parse_buffer);
+
+// 	  // 🟢 DESKTOP DEBUG HARNESS: Block the Mac terminal synchronously!
+// #ifdef NATIVE_DESKTOP
+// 	  // Force a clean visible prompt line on your Mac terminal
+// 	  std::cout << "\n> " << std::flush;
+
+// 	  std::string desktop_input;
+// 	  std::getline(std::cin, desktop_input); // This completely pauses your Mac thread until you type!
+
+// 	  // Sanitize input to lowercase
+// 	  std::string clean_input = "";
+// 	  for (char c : desktop_input) {
+// 	    if (c >= 'A' && c <= 'Z') c = c + 32;
+// 	    if (c >= 32 && c <= 126)  clean_input += c;
+// 	  }
+
+// 	  uint8_t max_capacity = read8(text_buffer);
+// 	  if (max_capacity == 0) max_capacity = 80;
+// 	  if (clean_input.length() > (size_t)(max_capacity - 1)) {
+// 	    clean_input = clean_input.substr(0, max_capacity - 1);
+// 	  }
+
+// 	  // Write out lengths and text directly to emulated system memory
+// 	  write8(text_buffer + 1, (uint8_t)clean_input.length());
+
+//           // Write text characters directly starting at text_buffer + 1
+//           uint32_t text_write_ptr = text_buffer + 1;
+//           for (char c : clean_input) {
+//               write8(text_write_ptr++, (uint8_t)c);
+//           }
+//           write8(text_write_ptr, 0); // Null-terminate the string for V3 safety
+
+// 	  // uint32_t text_write_ptr = text_buffer + 2;
+// 	  // for (char c : clean_input) {
+// 	  //   write8(text_write_ptr++, (uint8_t)c);
+// 	  // }
+// 	  // write8(text_write_ptr, 0);
+
+// 	  // Parse the input tokens immediately
+// 	  tokenize(text_buffer, parse_buffer, 0, false);
+// 	  waiting_input = false;
+// #else
+// 	  // Your native M5Stack Cardputer asynchronous state flag routine
+// 	  waiting_input = true;
+// #endif
+// 	  return;
+// 	}
+	if (op_num == 0x05) { // print_char
+	  if (ui != nullptr) {
+	    std::cout<<"[VAR DBG] op 0x05: "<<operands[0]<<" "<<(char)operands[0]<<std::endl;
+	    ui->print(std::string(1, (char)operands[0]));
 	  }
-
-	  uint8_t max_capacity = read8(text_buffer);
-	  if (max_capacity == 0) max_capacity = 80;
-	  if (clean_input.length() > (size_t)(max_capacity - 1)) {
-	    clean_input = clean_input.substr(0, max_capacity - 1);
-	  }
-
-	  // Write out lengths and text directly to emulated system memory
-	  write8(text_buffer + 1, (uint8_t)clean_input.length());
-	  uint32_t text_write_ptr = text_buffer + 2;
-	  for (char c : clean_input) {
-	    write8(text_write_ptr++, (uint8_t)c);
-	  }
-	  write8(text_write_ptr, 0);
-
-	  // Parse the input tokens immediately
-	  tokenize(text_buffer, parse_buffer, 0, false);
-	  waiting_input = false;
-#else
-	  // Your native M5Stack Cardputer asynchronous state flag routine
-	  waiting_input = true;
-#endif
 	  return;
 	}
-        if (op_num == 0x05) { if (ui != nullptr) ui->print(getObjectName(operands[0])); return; } // print_obj
+        // if (op_num == 0x05) {
+	//   if (ui != nullptr) {
+	//     std::cout<<"[VAR DBG] op 0x05: "<<operands[0]<<" "<<getObjectName(operands[0])<<std::endl;
+	//     ui->print(getObjectName(operands[0]));
+	//   }
+	// return;
+	// } // print_obj
         if (op_num == 0x06) {
             int16_t num = (int16_t)operands[0];
             if (ui != nullptr) {
-                ui->print(std::to_string(num));
+	      std::cout<<"[VAR DBG] op 0x06: "<<num<<" "<<std::to_string(num)<<std::endl;
+	      ui->print(std::to_string(num));
             }
             return;
         }
+
+// 🟢 FIXED LOG FOR EXTRACTING BY-VALUE ELEMENT INDEXING
+// printLog("[1OP DBG] Opcode: 0x%02X | Operand[0]: 0x%04llX | Unpacked: 0x%05llX\n",
+         // op_num, (unsigned long long)operands[0], (unsigned long long)operands[0] * 2);
+
         if (op_num == 0x07) {
             uint8_t sv = read8(pc++);
             int16_t range = (int16_t)operands[0];
@@ -816,22 +888,22 @@ void ZMachine::decode() {
         //     }
         //     return;
         // }
-	if (op_num == 0x0A) {
-	  // 🟢 RESTORED: In Version 3, VAR 0x0A is indeed show_status!
-	  uint16_t room_obj = getGlobal(0);
-	  uint16_t score    = getGlobal(1);
-	  uint16_t turns    = getGlobal(2);
+	// if (op_num == 0x0A) {
+	//   // 🟢 RESTORED: In Version 3, VAR 0x0A is indeed show_status!
+	//   uint16_t room_obj = getGlobal(0);
+	//   uint16_t score    = getGlobal(1);
+	//   uint16_t turns    = getGlobal(2);
 
-	  std::string room_name = getObjectName(room_obj);
+	//   std::string room_name = getObjectName(room_obj);
 
-	  char right_buffer[32];
-	  snprintf(right_buffer, sizeof(right_buffer), "Score: %d  Turns: %d", score, turns);
+	//   char right_buffer[32];
+	//   snprintf(right_buffer, sizeof(right_buffer), "Score: %d  Turns: %d", score, turns);
 
-	  if (ui != nullptr) {
-	    ui->setStatus(room_name, std::string(right_buffer));
-	  }
-	  return;
-	}
+	//   if (ui != nullptr) {
+	//     ui->setStatus(room_name, std::string(right_buffer));
+	//   }
+	//   return;
+	// }
         if (op_num == 0x19) {
             // V3 primarily uses this to silence output to the screen when writing text to memory buffers.
             // For a headless terminal setup, we can safely treat this as an execution pass-through stub.
@@ -861,10 +933,9 @@ void ZMachine::decode() {
         if (op_num == 0x1F) { uint8_t sv = read8(pc++); setVar(sv, ~operands[0]); return; } // VAR NOT
     }
 
-    uint16_t error_pc = pc - 1;
-    char debug_msg[64];
-    sprintf(debug_msg, "[OP_ERR] Unhandled: Class %d Op 0x%02X at PC: 0x%04X", op_class, op_num, error_pc);
-    if (ui != nullptr) ui->println(debug_msg);
+// 🟢 DIAGNOSTIC LOG (Put this at the very end of your opcode execution method)
+// printLog("[WARN] Unhandled Opcode executed at PC: 0x%05X | Opcode Num: 0x%02X\n", pc, op_num);
+
     waiting_input = true;
 }
 
@@ -885,11 +956,6 @@ uint16_t ZMachine::getVar(uint8_t var) {
         // 🟢 FIXED BOUNDARY RESOLUTION FROM HISTORY:
         // Ensure a small variable ID didn't accidentally bleed into global table space
         if (var < 0x10) {
-            if (ui != nullptr) {
-                char underflow_buf[128];
-                snprintf(underflow_buf, sizeof(underflow_buf), "[VAR_ERR] Underflow detected on ID 0x%02X", var);
-                ui->println(std::string(underflow_buf));
-            }
             return 0;
         }
         result_val = read16((uint32_t)globals + ((uint32_t)(var - 0x10) * 2));
@@ -902,7 +968,7 @@ void ZMachine::setVar(uint8_t var, uint16_t val) {
         push(val);
     }
     else if (var >= 0x01 && var <= 0x0F) {
-        if (fp > 0) frames[fp - 1].locals[var - 1] = val;
+      if (fp > 0) frames[fp - 1].locals[var - 1] = val;
     }
     else {
         if (var >= 0x10) {
@@ -937,15 +1003,6 @@ void ZMachine::branch(bool cond) {
 
     bool should_branch = (cond == branch_on_true);
 
-    if (ui != nullptr) {
-        char br_buf[128];
-        snprintf(br_buf, sizeof(br_buf),
-                 "[BRANCH] PC: 0x%04X | Cond Evaluated: %s | Target Expects: %s -> Taken: %s (Offset: %d)",
-                 branch_start_pc, cond ? "TRUE" : "FALSE", branch_on_true ? "TRUE" : "FALSE",
-                 should_branch ? "YES" : "NO", offset);
-        ui->println(std::string(br_buf));
-    }
-
     if (should_branch) {
         if (offset == 0) {
             ret(0);
@@ -970,8 +1027,6 @@ void ZMachine::call(uint16_t addr, uint8_t argc, uint16_t* args) {
     if (fp >= 32) return;
 
     uint32_t target_pc = (uint32_t)addr * 2;
-
-    printLog("[STACK CALL] From PC: 0x%04X -> Target PC: 0x%04X, Total Args: %d", pc, target_pc, argc);
 
     uint8_t local_count = read8(target_pc++);
 
@@ -1045,7 +1100,10 @@ void ZMachine::ret(uint16_t val) {
 // Text and Abbreviation Processing Subsystems
 // ============================================================================
 
-std::string ZMachine::printZString(uint16_t addr) {
+// 🟢 FIXED: Change signature to uint32_t to safely preserve unpacked byte addresses!
+std::string ZMachine::printZString(uint32_t addr, uint32_t* next_addr) {
+  // printLog("[TEXT DBG] Decoding Z-String at absolute byte address: 0x%05X\n", addr);
+
     const char* alphabets[3] = {
         "abcdefghijklmnopqrstuvwxyz",
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
@@ -1055,16 +1113,25 @@ std::string ZMachine::printZString(uint16_t addr) {
     std::vector<uint8_t> zchars;
     uint32_t curr_addr = addr;
 
-    // Phase 1: Unpack all 5-bit Z-characters linearly until the end-of-string bit is hit
-    while (true) {
-        uint16_t word = read16(curr_addr);
+    // Phase 1: Unpack all 5-bit Z-characters linearly
+    while (curr_addr < mem.size()) {
+        // Enforce strict 16-bit unsigned evaluation
+        uint16_t word = (uint16_t)read16(curr_addr);
         curr_addr += 2;
 
         zchars.push_back((word >> 10) & 0x1F);
         zchars.push_back((word >> 5)  & 0x1F);
         zchars.push_back(word         & 0x1F);
 
-        if (word & 0x8000) break; // Bit 15 indicates this is the final word
+        // Z-Spec: The highest bit (bit 15) of the 16-bit word specifies string end
+        if ((word & 0x8000) != 0) {
+	  std::cout << "[STRING END DBG] Final word: " << std::hex << word << " at address: " << curr_addr - 2 << std::endl;
+            break;
+        }
+    }
+
+    if (next_addr != nullptr) {
+        *next_addr = curr_addr;
     }
 
     int current_alphabet = 0;
@@ -1074,31 +1141,27 @@ std::string ZMachine::printZString(uint16_t addr) {
     for (size_t i = 0; i < zchars.size(); i++) {
         uint8_t c = zchars[i];
 
-        // Handle abbreviation commands (1, 2, 3)
-        if (c >= 1 && c <= 3) {
+        // 🟢 FIX 2: Abbreviation commands (1, 2, 3) ONLY exist in Alphabet 0 and 1!
+        if ((current_alphabet == 0 || current_alphabet == 1) && (c >= 1 && c <= 3)) {
             if (i + 1 < zchars.size()) {
                 uint8_t next_char = zchars[++i];
                 uint16_t abbr_index = 32 * (c - 1) + next_char;
-
                 uint16_t table_base = read16(0x18);
                 uint16_t raw_word_addr = read16((uint32_t)table_base + (abbr_index * 2));
                 uint32_t abbr_addr = (uint32_t)raw_word_addr * 2;
 
+                // printLog("[ABBR DBG] Index: %d | Base: 0x%04X | RawWordAddr: 0x%04X | TargetByteAddr: 0x%05X\n",
+                //          abbr_index, table_base, raw_word_addr, abbr_addr);
+
                 outputStr += printZString(abbr_addr);
             }
-            current_alphabet = 0;
+            current_alphabet = 0; // Abbreviations reset shift state
             continue;
         }
 
-        // Handle alphabet shifts (Shift 4 and Shift 5 are temporary single-character modifiers)
-        if (c == 4) {
-            current_alphabet = 1;
-            continue;
-        }
-        if (c == 5) {
-            current_alphabet = 2;
-            continue;
-        }
+        // Handle alphabet shifts
+        if (c == 4) { current_alphabet = 1; continue; }
+        if (c == 5) { current_alphabet = 2; continue; }
 
         // Handle 10-bit literal ASCII character encoding
         if (current_alphabet == 2 && c == 6) {
@@ -1108,18 +1171,34 @@ std::string ZMachine::printZString(uint16_t addr) {
                 char literal_char = (char)((high_bits << 5) | low_bits);
                 outputStr += literal_char;
             }
-            current_alphabet = 0; // 🟢 FIXED FROM HISTORY: Reset context BEFORE continuing!
+            current_alphabet = 0;
             continue;
         }
 
         // Handle standard character translations
         if (c == 0) {
             outputStr += " ";
-        } else if (c >= 6 && c <= 31) {
-            outputStr += alphabets[current_alphabet][c - 6];
+            // 🟢 FIX 1: Do NOT reset current_alphabet here! Z-Spec says 0 (space) does not shake the shift state.
+            continue;
         }
 
-        current_alphabet = 0; // Reset back to Alphabet 0 after a character has been printed
+        // 🟢 FIX 2 (cont.): Alphabet 2 maps characters 1, 2, 3 natively
+        if (current_alphabet == 2 && c >= 1 && c <= 5) {
+            // In Alphabet 2: 1='\n', 2='0', 3='1', 4='2', 5='3'
+            // Since your string array has "\n0123" starting at index 1:
+            outputStr += alphabets[current_alphabet][c];
+            current_alphabet = 0;
+            continue;
+        }
+
+        if (c >= 6 && c <= 31) {
+            outputStr += alphabets[current_alphabet][c - 6];
+            current_alphabet = 0; // 🟢 FIX 1: Reset ONLY when a shifted alphabet char is consumed
+            continue;
+        }
+
+        // If an unhandled Z-character slips through, reset state safely
+        current_alphabet = 0;
     }
 
     return outputStr;
@@ -1129,8 +1208,12 @@ uint16_t ZMachine::getGlobal(uint8_t index) {
     return read16((uint32_t)globals + ((uint32_t)index * 2));
 }
 
-uint16_t ZMachine::getObjectAddr(uint16_t obj) {
-    return (uint16_t)((uint32_t)obj_table + (31 * 2) + (((uint32_t)obj - 1) * 9));
+// 🟢 FIXED: Return type MUST be uint32_t to prevent 16-bit wrapping
+uint32_t ZMachine::getObjectAddr(uint16_t obj) {
+    if (obj == 0) return 0;
+
+    // Clean up the casting mess entirely
+    return obj_table + 62 + ((uint32_t)(obj - 1) * 9);
 }
 
 uint8_t ZMachine::getAttr(uint16_t obj, int attr) {
@@ -1232,192 +1315,22 @@ uint16_t ZMachine::getPropertyDataAddr(uint16_t obj, uint8_t prop) {
     return 0;
 }
 
-// uint16_t ZMachine::getPropertyDataAddr(uint16_t obj, uint8_t prop) {
-//     if (obj == 0) return 0;
-//     uint32_t addr = getObjectAddr(obj);
-//     uint32_t prop_ptr = read16(addr + 7);
-//     uint8_t name_len = read8(prop_ptr);
-//     prop_ptr += 1 + (name_len * 2);
-
-//     while (true) {
-//         uint8_t size_byte = read8(prop_ptr++);
-//         if (size_byte == 0) break;
-//         uint8_t prop_num = size_byte & 0x1F;
-//         uint8_t prop_len = (size_byte >> 5) + 1;
-//         if (prop_num == prop) {
-//             return (uint16_t)prop_ptr;
-//         }
-//         prop_ptr += prop_len;
-//     }
-//     return 0;
-// }
-
-// void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf) {
-//     uint8_t max_tokens = read8(parseBuf);
-//     uint8_t token_count = 0;
-
-//     // In V3, textBuf[0] is the maximum text capacity allowed, NOT the string length.
-//     uint8_t max_capacity = read8(textBuf);
-//     if (max_capacity == 0) max_capacity = 80; // Safety fallback
-
-//     std::string text_str = "";
-
-//     // 🟢 CRITICAL SYSTEM HEADER GUARD:
-//     // If the game passes an address in low system memory (like 0x000A),
-//     // it is pointing to a raw Z-string array or dynamic header block rather
-//     // than a normal max-capacity keyboard input buffer layout.
-//     if (textBuf < 0x0040) {
-//         // Look ahead directly at the structural bytes starting at this index
-//         uint32_t raw_ptr = textBuf;
-
-//         // Read out a safe boundary length or decode characters sequentially
-//         // until we hit standard text bounds.
-//         for (uint8_t i = 0; i < 32; i++) {
-//             char c = (char)read8(raw_ptr++);
-//             if (c == '\0' || c == '\n' || c == '\r') break;
-
-//             // Normalize case characters for evaluation stability
-//             if (c >= 'A' && c <= 'Z') c = c + 32;
-//             if (c >= 32 && c <= 126) text_str += c;
-//         }
-
-//         // If this header chunk resolved directly into a rogue character trace,
-//         // clear the count block and return early to allow the core execution to exit smoothly.
-//         if (text_str == "\"" || text_str.empty()) {
-//             write8(parseBuf + 1, 0);
-//             return;
-//         }
-//     } else {
-//         // --- Standard Operational Mode (Keyboard Inputs / High RAM Scratchpads) ---
-//         uint8_t max_capacity = read8(textBuf);
-//         if (max_capacity == 0) max_capacity = 80;
-
-//         uint32_t text_ptr = textBuf + 1;
-//         for (uint8_t i = 0; i < max_capacity; i++) {
-//             char c = (char)read8(text_ptr++);
-//             if (c == '\0' || c == '\n' || c == '\r') break;
-//             if (c >= 'A' && c <= 'Z') c = c + 32;
-//             if (c >= 32 && c <= 126)  text_str += c;
-//         }
-//     }
-
-//     if (ui != nullptr) {
-//         std::string raw_log = "[DBG] Tokenizer read text string: '" + text_str + "'";
-//         ui->println(raw_log);
-//     }
-
-//     // Fall back safely if the extracted text string is completely empty
-//     // (such as during the game's initial silent setup passes)
-//     if (text_str.empty()) {
-//         write8(parseBuf + 1, 0);
-//         return;
-//     }
-
-//     // --- Dynamic Dictionary Separator Evaluation ---
-//     // Look up the word separators defined dynamically by the game's dictionary header
-//     uint16_t dict_header_addr = read16(0x08);
-//     uint8_t num_separators = read8(dict_header_addr);
-
-//     auto is_separator = [&](char c) {
-//         if (c == ' ') return true; // Space is always a separator
-//         for (uint8_t s = 0; s < num_separators; s++) {
-//             if (c == (char)read8(dict_header_addr + 1 + s)) {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     };
-
-//     std::string current_word = "";
-//     uint8_t word_start_pos = 1;
-//     uint32_t parse_ptr = parseBuf + 2;
-
-//     auto process_word = [&](const std::string& word, uint8_t pos) {
-//         if (word.empty() || token_count >= max_tokens) return;
-
-//         uint16_t dict_word_addr = findWord(word);
-
-//         if (ui != nullptr) {
-//             char lookup_buf[64];
-//             snprintf(lookup_buf, sizeof(lookup_buf), "  Word: '%s' -> DictAddr: 0x%04X", word.c_str(), dict_word_addr);
-//             ui->println(lookup_buf);
-//         }
-
-//         write16(parse_ptr, dict_word_addr);
-//         write8(parse_ptr + 2, (uint8_t)word.length());
-
-//         // V3 expects the position byte to be the raw offset relative to textBuf starting from 1
-//         write8(parse_ptr + 3, pos + 1);
-
-//         parse_ptr += 4;
-//         token_count++;
-//     };
-
-//     // Iterate through characters and separate tokens properly
-//     for (size_t i = 0; i < text_str.length(); i++) {
-//         char c = text_str[i];
-
-//         if (is_separator(c)) {
-//             if (!current_word.empty()) {
-//                 process_word(current_word, word_start_pos);
-//                 current_word = "";
-//             }
-
-//             // If the separator itself is a structural dictionary token (like ',' or '.')
-//             // it must be processed as an independent word token.
-//             if (c != ' ') {
-//                 std::string sep_word(1, c);
-//                 process_word(sep_word, i);
-//             }
-//             word_start_pos = i + 1;
-//         } else {
-//             if (current_word.empty()) {
-//                 word_start_pos = i;
-//             }
-//             current_word += c;
-//         }
-//     }
-//     if (!current_word.empty()) {
-//         process_word(current_word, word_start_pos);
-//     }
-
-//     write8(parseBuf + 1, token_count);
-
-//     if (ui != nullptr) {
-//         char final_buf[64];
-//         snprintf(final_buf, sizeof(final_buf), "[DBG] Token Count written back to RAM: %d", token_count);
-//         ui->println(final_buf);
-//     }
-// }
-
 void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverride, bool is_raw_opcode) {
+    printLog("[TOKENIZE] textBuf, parseBuf: %d %d\n", textBuf, parseBuf);
     uint8_t max_tokens = read8(parseBuf);
     uint8_t token_count = 0;
     std::string text_str = "";
 
-    // 1. Establish the text parsing string target safely based on buffer style
-    if (is_raw_opcode) {
-        // 🟢 FIXED: The tokenise opcode points directly to raw ASCII characters!
-        // We parse until we hit a terminal or standard length bounds (typically up to 80 chars)
-        uint32_t text_ptr = textBuf;
-        for (int i = 0; i < 80; i++) {
-            char c = (char)read8(text_ptr++);
-            if (c == '\0' || c == '\n' || c == '\r') break;
-            if (c >= 'A' && c <= 'Z') c = c + 32;
-            if (c >= 32 && c <= 126)  text_str += c;
-        }
-    } else {
-        // Standard sread style buffer layout path
-        uint8_t max_capacity = read8(textBuf);
-        if (max_capacity == 0) max_capacity = 80;
+    // 🟢 FIXED: V3 Tokenize reads actual string size from byte 1,
+    // and text characters start at textBuf + 2.
+    uint8_t actual_text_length = read8(textBuf + 1);
 
-        uint32_t text_ptr = textBuf + 1;
-        for (uint8_t i = 0; i < max_capacity; i++) {
-            char c = (char)read8(text_ptr++);
-            if (c == '\0' || c == '\n' || c == '\r') break;
-            if (c >= 'A' && c <= 'Z') c = c + 32;
-            if (c >= 32 && c <= 126)  text_str += c;
-        }
+    uint32_t text_ptr = textBuf + 2;
+    for (uint8_t i = 0; i < actual_text_length; i++) {
+        char c = (char)read8(text_ptr++);
+        if (c == '\0' || c == '\n' || c == '\r') break;
+        if (c >= 'A' && c <= 'Z') c = c + 32;
+        if (c >= 32 && c <= 126)  text_str += c;
     }
 
     if (text_str.empty()) {
@@ -1476,7 +1389,8 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
             write16(parse_ptr, dict_word_addr);
             write8(parse_ptr + 2, (uint8_t)word.length());
             // Adjust position formatting for sread vs raw tokenise offsets if needed
-            write8(parse_ptr + 3, is_raw_opcode ? pos : pos + 1);
+            // write8(parse_ptr + 3, is_raw_opcode ? pos : pos + 1);
+            write8(parse_ptr + 3, pos + 1);
         }
 
         parse_ptr += 4;
@@ -1515,7 +1429,7 @@ void ZMachine::tokenize(uint16_t textBuf, uint16_t parseBuf, uint16_t dictOverri
 }
 
 void ZMachine::encodeWord(const std::string& word, uint16_t& out_w1, uint16_t& out_w2) {
-    uint8_t zchars[6] = {5, 5, 5, 5, 5, 5}; // Pre-fill completely with Z-character 5 padding values
+    uint8_t zchars[6] = {0, 0, 0, 0, 0, 0};
     size_t z_idx = 0;
 
     // Convert up to 6 Z-characters from the input text
@@ -1606,7 +1520,6 @@ uint16_t ZMachine::findWord(const std::string& word) {
     uint16_t num_entries = read16(dict_ptr);
     dict_ptr += 2;
 
-    // 🟢 ENCODE INPUT WORD INTO BINARY FIRST
     uint16_t target_w1 = 0;
     uint16_t target_w2 = 0;
     encodeWord(word, target_w1, target_w2);
@@ -1618,23 +1531,20 @@ uint16_t ZMachine::findWord(const std::string& word) {
         int mid = (low + high) / 2;
         uint32_t entry_addr = dict_ptr + (mid * entry_length);
 
-        // Read the true 4-byte token payload from the active dictionary row entry
         uint16_t dict_w1 = read16(entry_addr);
         uint16_t dict_w2 = read16(entry_addr + 2);
 
-        // Exact binary matching avoids string extraction formatting problems completely
         if (dict_w1 == target_w1 && dict_w2 == target_w2) {
             return (uint16_t)entry_addr;
         }
 
-        // Handle sorting tracking transitions based on numerical word magnitude rules
+        // Unsigned structural sorting magnitude evaluation
         if (dict_w1 < target_w1 || (dict_w1 == target_w1 && dict_w2 < target_w2)) {
             low = mid + 1;
         } else {
             high = mid - 1;
         }
     }
-
     return 0;
 }
 
